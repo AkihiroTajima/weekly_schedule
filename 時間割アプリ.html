@@ -11,6 +11,9 @@
     --line: #d8d2c4;
     --ink: #3a3a3a;
     --accent: #5b7a9d;
+    --danger: #a05050;
+    --warn: #b07a30;
+    --shadow: rgba(0,0,0,0.12);
   }
   * { box-sizing: border-box; }
   body {
@@ -21,11 +24,29 @@
     color: var(--ink);
   }
   .container { max-width: 860px; margin: 0 auto; }
+  .header-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
   h1 {
     font-size: 1.3rem;
     margin: 0 0 4px;
     letter-spacing: 0.1em;
   }
+  .header-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    border: 1px solid var(--line);
+    background: var(--paper);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 4px 8px;
+    line-height: 1;
+  }
+  .icon-btn:hover { background: #f0ece2; }
   .subtitle {
     font-size: 0.8rem;
     color: #888;
@@ -48,7 +69,7 @@
     color: var(--ink);
   }
   .toolbar button:hover { background: #f0ece2; }
-  .toolbar .danger { color: #a05050; }
+  .toolbar .danger { color: var(--danger); }
 
   /* 項目管理パネル */
   .activity-panel {
@@ -200,12 +221,58 @@
     transition: opacity 0.3s;
   }
   .saved-note.show { opacity: 1; }
+
+  /* ロック画面 / 同期設定（E2E暗号化） */
+  .lock-overlay {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+  }
+  .lock-overlay[hidden] { display: none; }
+  .lock-card {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 8px 30px var(--shadow); width: 100%; max-width: 380px; padding: 28px 26px;
+  }
+  .lock-card h2 { margin: 0 0 4px; font-size: 18px; }
+  .lock-card .lock-sub { margin: 0 0 18px; font-size: 13px; color: #888; line-height: 1.6; }
+  .lock-card input[type="password"] {
+    width: 100%; font: inherit; font-size: 14px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff;
+    color: var(--ink); outline: none; margin-bottom: 10px;
+  }
+  .lock-card input[type="password"]:focus { border-color: var(--accent); }
+  .lock-card button.unlock-btn {
+    width: 100%; background: var(--accent); color: #fff; border: 1px solid var(--accent);
+    border-radius: 8px; padding: 10px; font: inherit; font-size: 14px; cursor: pointer; margin-top: 4px;
+  }
+  .lock-card button.unlock-btn:hover { background: #4a6886; }
+  .lock-error { color: var(--danger); font-size: 12px; min-height: 16px; margin: 6px 0 0; }
+  .lock-note { font-size: 11px; color: var(--warn); line-height: 1.6; margin: 14px 0 0; }
+  .remember-row {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888;
+    margin: 4px 0 2px; cursor: pointer; user-select: none;
+  }
+  .remember-row input { margin: 0; cursor: pointer; }
+  .lock-reset {
+    margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line);
+    font-size: 12px; color: #888; text-align: center;
+  }
+  .link-btn {
+    background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
+    font-size: 12px; text-decoration: underline;
+  }
+  .link-btn:hover { color: #4a6886; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>週間時間割</h1>
-  <div class="subtitle">セルをクリックすると登録済みの項目から選べます。変更は自動で保存されます。</div>
+  <div class="header-row">
+    <h1>週間時間割</h1>
+    <div class="header-actions">
+      <button class="icon-btn" id="syncBtn" title="クラウド同期設定">☁</button>
+      <button class="icon-btn" id="lockBtn" title="ロックする">🔒</button>
+    </div>
+  </div>
+  <div class="subtitle">セルをクリックすると登録済みの項目から選べます。変更は自動で暗号化保存されます。</div>
 
   <div class="activity-panel">
     <div class="panel-title">項目リスト（セルで選択できるのはここにある項目だけ）</div>
@@ -218,7 +285,7 @@
 
   <div class="toolbar">
     <button id="addRowBtn">＋ 時間帯を追加</button>
-    <button id="resetBtn" class="danger">初期状態に戻す</button>
+    <button id="resetDataBtn" class="danger">初期状態に戻す</button>
     <span class="saved-note" id="savedNote">保存しました</span>
   </div>
   <table id="timetable">
@@ -230,11 +297,61 @@
   <div class="hint">※ 同じ項目のセルは自動で同じ色になります。時間帯ラベルは直接編集できます。</div>
 </div>
 
-<script>
-const DAYS = ["月", "火", "水", "木", "金"];
-const STORAGE_KEY = "weekly-timetable-v2";
+<!-- ロック画面（E2E暗号化） -->
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-card">
+    <h2 id="lockTitle">ロック解除</h2>
+    <p class="lock-sub" id="lockSub">パスフレーズを入力してください。</p>
+    <form id="lockForm">
+      <input type="password" id="passInput" placeholder="パスフレーズ" autocomplete="off">
+      <input type="password" id="passConfirm" placeholder="パスフレーズ（確認）" autocomplete="off" hidden>
+      <label class="remember-row">
+        <input type="checkbox" id="rememberPass">
+        このデバイスで記憶する（次回から自動で解除）
+      </label>
+      <button type="submit" class="unlock-btn" id="unlockBtn">解除</button>
+    </form>
+    <p class="lock-error" id="lockError"></p>
+    <p class="lock-note" id="lockNote" hidden>
+      ⚠ パスフレーズを忘れると保存データは復元できません。安全な場所に控えてください。
+    </p>
+    <div class="lock-reset" id="lockResetRow" hidden>
+      パスフレーズを忘れた場合は
+      <button type="button" id="wipeBtn" class="link-btn">初期化（全データ削除）</button>
+    </div>
+    <p style="margin:10px 0 0; font-size:12px; color:#888; text-align:center;">
+      別の端末のデータを使うには
+      <button type="button" id="lockSyncBtn" class="link-btn">クラウド同期を設定</button>
+    </p>
+  </div>
+</div>
 
-// todoリスト＋Salesforce受験計画に沿った初期データ（平日のみ／休日向きタスクは除外）
+<!-- クラウド同期設定 -->
+<div class="lock-overlay" id="syncOverlay" hidden>
+  <div class="lock-card">
+    <h2>クラウド同期設定</h2>
+    <p class="lock-sub">
+      Pages に登録したトークンを入力すると、暗号文をサーバーに同期します。<br>
+      空のまま保存すると同期OFF（このデバイスのみ保存）になります。
+    </p>
+    <input type="password" id="syncTokenInput" placeholder="同期トークン（TIMETABLE_API_TOKEN）" autocomplete="off">
+    <button type="button" class="unlock-btn" id="syncSaveBtn">保存</button>
+    <p class="lock-error" id="syncMsg"></p>
+    <div class="lock-reset">
+      <button type="button" id="syncCloseBtn" class="link-btn">閉じる</button>
+    </div>
+    <p class="lock-note">
+      サーバーへ送られるのは暗号文のみ。トークンはこのデバイスにだけ保存されます。
+    </p>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const DAYS = ["月", "火", "水", "木", "金"];
+
+// todoリスト＋Salesforce受験計画に沿ったサンプル初期データ（平日のみ）
 const DEFAULT_DATA = {
   rows: ["朝", "昼", "午後", "18", "19", "20", "21", "22", "23"],
   activities: ["10km走", "情報収集", "Salesforce", "模写", "AtCoder", "微積", "Rust", "お風呂"],
@@ -257,40 +374,118 @@ const PALETTE = [
   "#e0f7f4", "#fdeaf6", "#eef2dd", "#ffe9d6", "#e3e9f7"
 ];
 
-let data;
+let data = JSON.parse(JSON.stringify(DEFAULT_DATA));
 
-function load() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      data = JSON.parse(raw);
-      if (data && Array.isArray(data.rows) && data.cells) {
-        // 旧バージョンのデータには項目リストがないので、セルの値から復元する
-        if (!Array.isArray(data.activities)) {
-          const found = new Set();
-          for (const row of Object.values(data.cells)) {
-            for (const v of row) {
-              if (v && v.trim()) found.add(v.trim());
-            }
-          }
-          data.activities = [...found];
-        }
-        return;
+// ============================================================
+//  永続化 + E2E暗号化（クラウド同期つき）
+//  line-editor(/api/state) / plot-graph(/api/plot) とは環境分離:
+//  エンドポイント /api/timetable・専用シークレット TIMETABLE_API_TOKEN・
+//  専用KVバインド TIMETABLE_VAULT（キー timetable:default）。
+// ============================================================
+const VAULT_KEY      = "timetableVault";        // 暗号文の保存キー（localStorage）
+const LEGACY_KEY     = "weekly-timetable-v2";    // 旧・平文版のキー（あれば暗号化して移行）
+const SYNC_URL       = "/api/timetable";         // 専用エンドポイント
+const SYNC_TOKEN_KEY = "timetableApiToken";
+const PASS_CACHE_KEY = "timetablePassCache";
+
+function getToken(){ try { return localStorage.getItem(SYNC_TOKEN_KEY); } catch(e){ return null; } }
+function syncEnabled(){ return !!getToken(); }
+function localGet(){ try { return localStorage.getItem(VAULT_KEY); } catch(e){ return null; } }
+function localSet(s){ try { localStorage.setItem(VAULT_KEY, s); } catch(e){} }
+
+async function storageGetRaw(){
+  const local = localGet();
+  if (syncEnabled()){
+    try {
+      const r = await fetch(SYNC_URL, { headers: { "Authorization": "Bearer " + getToken() } });
+      if (r.ok){
+        const t = await r.text();
+        if (t) return t;          // リモートにデータあり → 優先
+        return local || null;     // リモート空 → ローカルがあれば移行用に返す
       }
+    } catch(e){ /* 通信失敗 → ローカルへフォールバック */ }
+    return local || null;
+  }
+  return local || null;
+}
+async function storageSetRaw(s){
+  localSet(s); // 常にローカルにもキャッシュ（オフライン/フォールバック用）
+  if (syncEnabled()){
+    try {
+      await fetch(SYNC_URL, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + getToken(), "content-type": "application/json" },
+        body: s
+      });
+    } catch(e){ /* 通信失敗時はローカルキャッシュのみ */ }
+  }
+}
+
+// パスフレーズのキャッシュ（このデバイスでの自動解除用・任意）
+function getCachedPass(){ try { return localStorage.getItem(PASS_CACHE_KEY); } catch(e){ return null; } }
+function cachePass(p){ try { localStorage.setItem(PASS_CACHE_KEY, p); } catch(e){} }
+function clearCachedPass(){ try { localStorage.removeItem(PASS_CACHE_KEY); } catch(e){} }
+
+// 暗号ヘルパ（Web Crypto: AES-GCM 256bit + PBKDF2）
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+const PBKDF2_ITER = 150000;
+function _b64(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
+function _unb64(s){ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
+async function deriveKey(passphrase, salt){
+  const base = await crypto.subtle.importKey("raw", _enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: salt, iterations: PBKDF2_ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+}
+async function encryptObj(key, salt, obj){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, _enc.encode(JSON.stringify(obj)));
+  return JSON.stringify({ v: 1, salt: _b64(salt), iv: _b64(iv), ct: _b64(ct) });
+}
+async function decryptBlob(key, blobStr){
+  const blob = JSON.parse(blobStr);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _unb64(blob.iv) }, key, _unb64(blob.ct));
+  return JSON.parse(_dec.decode(pt));
+}
+
+// 鍵はセッション中だけメモリに保持（保存しない）
+let cryptoKey = null;
+let vaultSalt = null;
+
+// 旧バージョンのデータ補正（項目リストが無い等）
+function normalize(d){
+  if (!d || typeof d !== "object") return JSON.parse(JSON.stringify(DEFAULT_DATA));
+  if (!Array.isArray(d.rows)) d.rows = DEFAULT_DATA.rows.slice();
+  if (!d.cells || typeof d.cells !== "object") d.cells = {};
+  if (!Array.isArray(d.activities)) {
+    const found = new Set();
+    for (const row of Object.values(d.cells)) {
+      if (Array.isArray(row)) for (const v of row) if (v && v.trim()) found.add(v.trim());
     }
-  } catch (e) {}
-  data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+    d.activities = [...found];
+  }
+  return d;
 }
 
-let saveTimer;
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  const note = document.getElementById("savedNote");
-  note.classList.add("show");
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => note.classList.remove("show"), 1200);
+let saveTimer = null;
+function scheduleSave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 300); }
+async function save(){
+  if (!cryptoKey || !vaultSalt) return;
+  try {
+    const blob = await encryptObj(cryptoKey, vaultSalt, data);
+    await storageSetRaw(blob);
+    const note = document.getElementById("savedNote");
+    note.classList.add("show");
+    clearTimeout(save._t);
+    save._t = setTimeout(() => note.classList.remove("show"), 1200);
+  } catch(e){ console.error("保存失敗", e); }
 }
 
+// ============================================================
+//  時間割の描画
+// ============================================================
 function colorFor(text) {
   const t = (text || "").trim();
   if (!t) return "transparent";
@@ -336,7 +531,7 @@ function addActivity() {
   data.activities.push(name);
   input.value = "";
   input.focus();
-  save();
+  scheduleSave();
   renderActivities();
   renderTable();
 }
@@ -354,7 +549,7 @@ function removeActivity(name) {
       if (row[i] === name) row[i] = "";
     }
   }
-  save();
+  scheduleSave();
   renderActivities();
   renderTable();
 }
@@ -381,7 +576,7 @@ function renderTable() {
         delete data.cells[rowLabel];
         data.rows[ri] = newLabel;
       }
-      save();
+      scheduleSave();
       renderTable();
     });
     th.appendChild(labelInput);
@@ -418,7 +613,7 @@ function renderTable() {
       select.addEventListener("change", () => {
         data.cells[rowLabel][di] = select.value;
         td.style.background = colorFor(select.value);
-        save();
+        scheduleSave();
       });
 
       td.appendChild(select);
@@ -428,6 +623,8 @@ function renderTable() {
     tbody.appendChild(tr);
   });
 }
+
+function renderAll(){ renderActivities(); renderTable(); }
 
 document.getElementById("addActivityBtn").addEventListener("click", addActivity);
 document.getElementById("newActivityInput").addEventListener("keydown", e => {
@@ -445,21 +642,198 @@ document.getElementById("addRowBtn").addEventListener("click", () => {
   }
   data.rows.push(label);
   data.cells[label] = ["", "", "", "", ""];
-  save();
+  scheduleSave();
   renderTable();
 });
 
-document.getElementById("resetBtn").addEventListener("click", () => {
+document.getElementById("resetDataBtn").addEventListener("click", () => {
   if (!confirm("入力した内容を消して初期状態に戻しますか？")) return;
   data = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  save();
-  renderActivities();
-  renderTable();
+  scheduleSave();
+  renderAll();
 });
 
-load();
-renderActivities();
-renderTable();
+// ============================================================
+//  ロック / 解除（E2E）
+// ============================================================
+const lockOverlay  = document.getElementById("lockOverlay");
+const lockTitle    = document.getElementById("lockTitle");
+const lockSub      = document.getElementById("lockSub");
+const lockForm     = document.getElementById("lockForm");
+const passInput    = document.getElementById("passInput");
+const passConfirm  = document.getElementById("passConfirm");
+const lockError    = document.getElementById("lockError");
+const lockNote     = document.getElementById("lockNote");
+const unlockBtn    = document.getElementById("unlockBtn");
+const rememberPass = document.getElementById("rememberPass");
+const lockResetRow = document.getElementById("lockResetRow");
+
+let lockMode = "unlock"; // 'unlock' | 'create'
+
+function showLock(mode){
+  lockMode = mode;
+  lockError.textContent = "";
+  passInput.value = "";
+  passConfirm.value = "";
+  rememberPass.checked = !!getCachedPass();
+  lockResetRow.hidden = (mode !== "unlock");
+  if (mode === "create"){
+    lockTitle.textContent = "パスフレーズを設定";
+    lockSub.textContent = "時間割はこのパスフレーズで暗号化されます。初回のみ設定します。";
+    passConfirm.hidden = false;
+    lockNote.hidden = false;
+    unlockBtn.textContent = "設定して開始";
+  } else {
+    lockTitle.textContent = "ロック解除";
+    lockSub.textContent = "パスフレーズを入力してください。";
+    passConfirm.hidden = true;
+    lockNote.hidden = true;
+    unlockBtn.textContent = "解除";
+  }
+  lockOverlay.hidden = false;
+  setTimeout(() => passInput.focus(), 50);
+}
+function hideLock(){ lockOverlay.hidden = true; }
+
+lockForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  lockError.textContent = "";
+  const pass = passInput.value;
+  if (!pass){ lockError.textContent = "パスフレーズを入力してください。"; return; }
+  unlockBtn.disabled = true;
+  try {
+    if (lockMode === "create"){
+      if (pass.length < 6){ lockError.textContent = "6文字以上にしてください。"; return; }
+      if (pass !== passConfirm.value){ lockError.textContent = "確認用と一致しません。"; return; }
+      vaultSalt = crypto.getRandomValues(new Uint8Array(16));
+      cryptoKey = await deriveKey(pass, vaultSalt);
+      // 既存の平文データ(旧版)があれば暗号化して移行、なければサンプル
+      let migrated = false;
+      try {
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
+        if (legacy && (Array.isArray(legacy.rows) || legacy.cells)){ data = normalize(legacy); migrated = true; }
+      } catch(e2){}
+      if (!migrated) data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+      await save();
+      try { localStorage.removeItem(LEGACY_KEY); } catch(e3){}
+      if (rememberPass.checked) cachePass(pass); else clearCachedPass();
+      hideLock();
+      renderAll();
+    } else {
+      const raw = await storageGetRaw();
+      const blob = JSON.parse(raw);
+      vaultSalt = _unb64(blob.salt);
+      cryptoKey = await deriveKey(pass, vaultSalt);
+      data = normalize(await decryptBlob(cryptoKey, raw)); // 失敗＝パスフレーズ不一致
+      if (rememberPass.checked) cachePass(pass); else clearCachedPass();
+      hideLock();
+      renderAll();
+    }
+  } catch(err){
+    cryptoKey = null;
+    lockError.textContent = lockMode === "create" ? "初期化に失敗しました。" : "パスフレーズが違います。";
+  } finally {
+    unlockBtn.disabled = false;
+  }
+});
+
+function lockNow(){
+  clearCachedPass(); // 手動ロック時はキャッシュも破棄（自動再解除しない）
+  cryptoKey = null;
+  vaultSalt = null;
+  data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  showLock("unlock");
+}
+document.getElementById("lockBtn").addEventListener("click", async () => {
+  if (await storageGetRaw()) lockNow();
+});
+
+// パスフレーズ忘れ時の初期化（全データ削除）
+document.getElementById("wipeBtn").addEventListener("click", () => {
+  if (!confirm("保存された全データを削除し、初期状態に戻します。\nこの操作は取り消せず、暗号化データは復元できません。よろしいですか？")) return;
+  if (!confirm("本当に削除しますか？（最終確認）")) return;
+  try { localStorage.removeItem(VAULT_KEY); } catch(e){}
+  clearCachedPass();
+  cryptoKey = null;
+  vaultSalt = null;
+  data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  showLock("create");
+});
+
+// キャッシュされたパスフレーズで自動解除を試みる
+async function tryAutoUnlock(){
+  const raw = await storageGetRaw();
+  const cached = getCachedPass();
+  if (!raw || !cached) return false;
+  try {
+    const blob = JSON.parse(raw);
+    vaultSalt = _unb64(blob.salt);
+    cryptoKey = await deriveKey(cached, vaultSalt);
+    data = normalize(await decryptBlob(cryptoKey, raw));
+    hideLock();
+    renderAll();
+    return true;
+  } catch(e){
+    cryptoKey = null;
+    vaultSalt = null;
+    clearCachedPass(); // 壊れている/不一致ならキャッシュ破棄
+    return false;
+  }
+}
+
+// ============================================================
+//  クラウド同期設定モーダル
+// ============================================================
+const syncOverlay = document.getElementById("syncOverlay");
+const syncTokenInput = document.getElementById("syncTokenInput");
+const syncMsg = document.getElementById("syncMsg");
+function openSync(){
+  syncTokenInput.value = getToken() || "";
+  syncMsg.textContent = "";
+  syncMsg.style.color = "";
+  syncOverlay.hidden = false;
+  setTimeout(() => syncTokenInput.focus(), 50);
+}
+document.getElementById("syncBtn").addEventListener("click", openSync);
+document.getElementById("lockSyncBtn").addEventListener("click", openSync);
+document.getElementById("syncCloseBtn").addEventListener("click", () => { syncOverlay.hidden = true; });
+document.getElementById("syncSaveBtn").addEventListener("click", async () => {
+  const t = syncTokenInput.value.trim();
+  try {
+    if (t) localStorage.setItem(SYNC_TOKEN_KEY, t);
+    else localStorage.removeItem(SYNC_TOKEN_KEY);
+  } catch(e){}
+  if (t && cryptoKey){
+    // 解除済みなら現在のデータをサーバーへ反映
+    syncMsg.style.color = "#888";
+    syncMsg.textContent = "同期中…";
+    await save();
+    syncMsg.style.color = "var(--accent)";
+    syncMsg.textContent = "同期ONにしました。";
+  } else if (t){
+    // ロック中（別端末の初回設定など）→ リモートを取得し直す
+    syncMsg.style.color = "#888";
+    syncMsg.textContent = "取得中…";
+    syncOverlay.hidden = true;
+    await init();
+  } else {
+    syncMsg.style.color = "#888";
+    syncMsg.textContent = "同期OFF（このデバイスのみ）にしました。";
+  }
+});
+
+// ============================================================
+//  起動
+// ============================================================
+async function init(){
+  if (await storageGetRaw()){
+    if (await tryAutoUnlock()) return;
+    showLock("unlock");
+  } else {
+    showLock("create");
+  }
+}
+init();
 </script>
 </body>
 </html>
